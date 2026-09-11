@@ -1,6 +1,7 @@
+
 #include <SpotifyArduino.h>
 #include <SpotifyArduinoCert.h>
-
+#include <HTTPClient.h>
 
 // ------------------------------------------------------------
 // Spotify constants
@@ -10,21 +11,503 @@
 
 
 // ------------------------------------------------------------
+// Week 5 Day 3 - Album artwork RAM buffer
+// ------------------------------------------------------------
+
+uint8_t *g_imageBuffer = nullptr;
+size_t g_imageSize = 0;
+
+volatile bool g_artworkReady = false;
+String g_cachedAlbumImageUrl = "";
+
+bool g_artworkDownloadSucceeded = false;
+
+
+// ------------------------------------------------------------
+// Week 5 Day 3 - Download album artwork over HTTPS
+// ------------------------------------------------------------
+
+void downloadAlbumArtwork()
+{
+    // --------------------------------------------------------
+    // Day 4: reset download success status
+    // --------------------------------------------------------
+
+    g_artworkDownloadSucceeded = false;
+
+
+    if (g_albumImageUrl.length() == 0)
+    {
+        Serial.println(
+            "No 300x300 album image URL available."
+        );
+
+        return;
+    }
+
+
+    Serial.println();
+
+    Serial.println(
+        "========== ARTWORK DOWNLOAD =========="
+    );
+
+
+    // --------------------------------------------------------
+    // Check free heap BEFORE allocating
+    // --------------------------------------------------------
+
+    size_t freeHeap =
+        ESP.getFreeHeap();
+
+
+    Serial.print(
+        "Free heap BEFORE download: "
+    );
+
+    Serial.println(
+        freeHeap
+    );
+
+
+    // --------------------------------------------------------
+    // HTTPS client
+    // --------------------------------------------------------
+
+    HTTPClient http;
+
+
+    if (!http.begin(
+            client,
+            g_albumImageUrl
+        ))
+    {
+        Serial.println(
+            "ERROR: Failed to initialize HTTPS connection."
+        );
+
+        return;
+    }
+
+
+    Serial.println(
+        "Downloading album artwork..."
+    );
+
+
+    // --------------------------------------------------------
+    // Send HTTPS GET request
+    // --------------------------------------------------------
+
+    int httpCode =
+        http.GET();
+
+
+    Serial.print(
+        "HTTP response code: "
+    );
+
+    Serial.println(
+        httpCode
+    );
+
+
+    // --------------------------------------------------------
+    // Successful download
+    // --------------------------------------------------------
+
+    if (httpCode == HTTP_CODE_OK)
+    {
+        int contentLength =
+            http.getSize();
+
+
+        Serial.print(
+            "Expected JPEG size: "
+        );
+
+        Serial.print(
+            contentLength
+        );
+
+        Serial.println(
+            " bytes"
+        );
+
+
+        // ----------------------------------------------------
+        // Check whether Content-Length is available
+        // ----------------------------------------------------
+
+        if (contentLength <= 0)
+        {
+            Serial.println(
+                "ERROR: Invalid or unknown JPEG size."
+            );
+
+            http.end();
+
+            return;
+        }
+
+
+        // ----------------------------------------------------
+        // Make sure image fits into available RAM
+        // ----------------------------------------------------
+
+        if (
+            (size_t)contentLength >=
+            freeHeap
+        )
+        {
+            Serial.println(
+                "ERROR: Image is too large for available RAM."
+            );
+
+            http.end();
+
+            return;
+        }
+
+
+        // ----------------------------------------------------
+        // If an old artwork buffer still exists,
+        // free it before allocating a new one.
+        // ----------------------------------------------------
+
+        if (g_imageBuffer != nullptr)
+        {
+            free(
+                g_imageBuffer
+            );
+
+            g_imageBuffer =
+                nullptr;
+
+            g_imageSize =
+                0;
+
+            g_artworkReady =
+                false;
+        }
+
+
+        // ----------------------------------------------------
+        // Allocate RAM buffer
+        // ----------------------------------------------------
+
+        g_imageBuffer =
+            (uint8_t *)malloc(
+                contentLength
+            );
+
+
+        if (g_imageBuffer == nullptr)
+        {
+            Serial.println(
+                "ERROR: RAM allocation failed."
+            );
+
+            http.end();
+
+            return;
+        }
+
+
+        Serial.println(
+            "RAM buffer allocated."
+        );
+
+
+        // ----------------------------------------------------
+        // Download JPEG into RAM
+        // ----------------------------------------------------
+
+        WiFiClient *stream =
+            http.getStreamPtr();
+
+
+        int totalBytes =
+            0;
+
+
+        while (
+            http.connected() &&
+            totalBytes < contentLength
+        )
+        {
+            size_t available =
+                stream->available();
+
+
+            if (available > 0)
+            {
+                int bytesToRead =
+                    available;
+
+
+                if (
+                    totalBytes +
+                    bytesToRead >
+                    contentLength
+                )
+                {
+                    bytesToRead =
+                        contentLength -
+                        totalBytes;
+                }
+
+
+                int bytesRead =
+                    stream->readBytes(
+                        g_imageBuffer +
+                        totalBytes,
+                        bytesToRead
+                    );
+
+
+                if (bytesRead > 0)
+                {
+                    totalBytes +=
+                        bytesRead;
+                }
+            }
+
+
+            delay(1);
+        }
+
+
+        // ----------------------------------------------------
+        // Download result
+        // ----------------------------------------------------
+
+        Serial.print(
+            "Downloaded bytes: "
+        );
+
+        Serial.println(
+            totalBytes
+        );
+
+
+        Serial.print(
+            "Free heap AFTER download: "
+        );
+
+        Serial.println(
+            ESP.getFreeHeap()
+        );
+
+
+        if (
+            totalBytes ==
+            contentLength
+        )
+        {
+            g_imageSize =
+                totalBytes;
+
+
+            // ------------------------------------------------
+            // JPEG HEADER CHECK
+            // ------------------------------------------------
+
+            Serial.println();
+
+            Serial.println(
+                "---------- JPEG DIAGNOSTIC ----------"
+            );
+
+
+            Serial.print(
+                "JPEG first bytes: "
+            );
+
+
+            Serial.print(
+                g_imageBuffer[0],
+                HEX
+            );
+
+
+            Serial.print(
+                " "
+            );
+
+
+            Serial.print(
+                g_imageBuffer[1],
+                HEX
+            );
+
+
+            Serial.print(
+                " "
+            );
+
+
+            Serial.println(
+                g_imageBuffer[2],
+                HEX
+            );
+
+
+            // ------------------------------------------------
+            // JPEG END MARKER CHECK
+            // ------------------------------------------------
+
+            Serial.print(
+                "JPEG last bytes: "
+            );
+
+
+            Serial.print(
+                g_imageBuffer[
+                    g_imageSize - 2
+                ],
+                HEX
+            );
+
+
+            Serial.print(
+                " "
+            );
+
+
+            Serial.println(
+                g_imageBuffer[
+                    g_imageSize - 1
+                ],
+                HEX
+            );
+
+
+            Serial.println(
+                "-------------------------------------"
+            );
+
+
+            // ------------------------------------------------
+            // Tell MAIN LOOP that image is ready.
+            // Main loop will decode and draw it.
+            // ------------------------------------------------
+
+            g_artworkReady =
+                true;
+
+
+            // ------------------------------------------------
+            // Day 4: download completed successfully
+            // ------------------------------------------------
+
+            g_artworkDownloadSucceeded =
+                true;
+
+
+            Serial.println();
+
+            Serial.println(
+                "SUCCESS: JPEG downloaded completely into RAM."
+            );
+
+            Serial.println(
+                "Artwork buffer is ready for TJpg_Decoder."
+            );
+        }
+        else
+        {
+            Serial.println();
+
+            Serial.println(
+                "WARNING: Download incomplete."
+            );
+
+
+            // ------------------------------------------------
+            // Free incomplete image
+            // ------------------------------------------------
+
+            free(
+                g_imageBuffer
+            );
+
+            g_imageBuffer =
+                nullptr;
+
+            g_imageSize =
+                0;
+
+            g_artworkReady =
+                false;
+        }
+
+
+        Serial.print(
+            "Free heap AFTER download handling: "
+        );
+
+        Serial.println(
+            ESP.getFreeHeap()
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Download failed
+    // --------------------------------------------------------
+
+    else
+    {
+        Serial.println();
+
+        Serial.println(
+            "ERROR: Failed to download album artwork."
+        );
+    }
+
+
+    // --------------------------------------------------------
+    // Close HTTP connection
+    // --------------------------------------------------------
+
+    http.end();
+
+
+    Serial.println(
+        "====================================="
+    );
+}
+
+
+// ------------------------------------------------------------
 // Currently Playing callback
 // ------------------------------------------------------------
 
-void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
+void printCurrentlyPlayingToSerial(
+    CurrentlyPlaying currentlyPlaying
+)
 {
-    g_isPlaying = currentlyPlaying.isPlaying;
+    g_isPlaying =
+        currentlyPlaying.isPlaying;
+
 
     g_trackName =
-        String(currentlyPlaying.trackName);
+        String(
+            currentlyPlaying.trackName
+        );
+
 
     g_trackUri =
-        String(currentlyPlaying.trackUri);
+        String(
+            currentlyPlaying.trackUri
+        );
+
 
     g_albumName =
-        String(currentlyPlaying.albumName);
+        String(
+            currentlyPlaying.albumName
+        );
 
 
     // --------------------------------------------------------
@@ -34,11 +517,10 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     g_progressMs =
         currentlyPlaying.progressMs;
 
+
     g_durationMs =
         currentlyPlaying.durationMs;
 
-    // Reset local timing whenever Spotify gives us
-    // a fresh progress position.
 
     g_lastProgressUpdate =
         millis();
@@ -48,16 +530,22 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     // Get all credited artists
     // --------------------------------------------------------
 
-    g_artistName = "";
+    g_artistName =
+        "";
 
-    for (int i = 0;
-         i < currentlyPlaying.numArtists;
-         i++)
+
+    for (
+        int i = 0;
+        i < currentlyPlaying.numArtists;
+        i++
+    )
     {
         if (i > 0)
         {
-            g_artistName += ", ";
+            g_artistName +=
+                ", ";
         }
+
 
         g_artistName +=
             String(
@@ -70,7 +558,8 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     // Album image
     // --------------------------------------------------------
 
-    g_albumImageUrl = "";
+    g_albumImageUrl =
+        "";
 
 
     // --------------------------------------------------------
@@ -84,40 +573,59 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     );
 
 
-    Serial.print("Is Playing: ");
+    Serial.print(
+        "Is Playing: "
+    );
+
 
     if (currentlyPlaying.isPlaying)
     {
-        Serial.println("Yes");
+        Serial.println(
+            "Yes"
+        );
     }
     else
     {
-        Serial.println("No");
+        Serial.println(
+            "No"
+        );
     }
 
 
-    Serial.print("Track: ");
+    Serial.print(
+        "Track: "
+    );
+
 
     Serial.println(
         g_trackName
     );
 
 
-    Serial.print("Artist: ");
+    Serial.print(
+        "Artist: "
+    );
+
 
     Serial.println(
         g_artistName
     );
 
 
-    Serial.print("Album: ");
+    Serial.print(
+        "Album: "
+    );
+
 
     Serial.println(
         g_albumName
     );
 
 
-    Serial.print("Track URI: ");
+    Serial.print(
+        "Track URI: "
+    );
+
 
     Serial.println(
         g_trackUri
@@ -128,19 +636,29 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     // Progress information
     // --------------------------------------------------------
 
-    Serial.print("Progress: ");
+    Serial.print(
+        "Progress: "
+    );
+
 
     Serial.print(
         g_progressMs
     );
 
-    Serial.print(" ms / ");
+
+    Serial.print(
+        " ms / "
+    );
+
 
     Serial.print(
         g_durationMs
     );
 
-    Serial.println(" ms");
+
+    Serial.println(
+        " ms"
+    );
 
 
     // --------------------------------------------------------
@@ -154,36 +672,55 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     );
 
 
-    for (int i = 0;
-         i < currentlyPlaying.numImages;
-         i++)
+    for (
+        int i = 0;
+        i < currentlyPlaying.numImages;
+        i++
+    )
     {
-        Serial.print("Image ");
+        Serial.print(
+            "Image "
+        );
 
-        Serial.println(i);
+
+        Serial.println(
+            i
+        );
 
 
-        Serial.print("URL: ");
+        Serial.print(
+            "URL: "
+        );
+
 
         Serial.println(
             currentlyPlaying.albumImages[i].url
         );
 
 
-        Serial.print("Dimensions: ");
+        Serial.print(
+            "Dimensions: "
+        );
+
 
         Serial.print(
             currentlyPlaying.albumImages[i].width
         );
 
-        Serial.print(" x ");
+
+        Serial.print(
+            " x "
+        );
+
 
         Serial.println(
             currentlyPlaying.albumImages[i].height
         );
 
 
-        if (currentlyPlaying.albumImages[i].width == 300)
+        if (
+            currentlyPlaying.albumImages[i].width == 300
+        )
         {
             g_albumImageUrl =
                 String(
@@ -199,6 +736,7 @@ void printCurrentlyPlayingToSerial(CurrentlyPlaying currentlyPlaying)
     Serial.print(
         "Selected 300x300 image URL: "
     );
+
 
     Serial.println(
         g_albumImageUrl
@@ -228,17 +766,36 @@ void initSpotify()
 
 
     Serial.println(
+        "NOTE: setInsecure() is being used as a deliberate"
+    );
+
+
+    Serial.println(
+        "prototype shortcut. Production firmware should"
+    );
+
+
+    Serial.println(
+        "verify or pin the server certificate."
+    );
+
+
+    Serial.println(
         "Testing direct connection to Spotify..."
     );
 
 
-    if (client.connect(
+    if (
+        client.connect(
             "accounts.spotify.com",
-            443))
+            443
+        )
+    )
     {
         Serial.println(
             "DIRECT CONNECTION SUCCESS!"
         );
+
 
         client.stop();
     }
@@ -262,6 +819,7 @@ void initSpotify()
             "TLS ERROR: "
         );
 
+
         Serial.println(
             errorBuffer
         );
@@ -270,13 +828,16 @@ void initSpotify()
 
     Serial.println();
 
+
     Serial.println(
         "-------------------------------------"
     );
 
+
     Serial.println(
         "Refreshing Spotify access token..."
     );
+
 
     Serial.println(
         "-------------------------------------"
@@ -293,7 +854,9 @@ void initSpotify()
 
 
     Serial.println(
-        refreshResult ? "TRUE" : "FALSE"
+        refreshResult
+            ? "TRUE"
+            : "FALSE"
     );
 
 
@@ -327,7 +890,8 @@ void initSpotify()
     }
 
 
-    lastCheck = 0;
+    lastCheck =
+        0;
 }
 
 
@@ -337,9 +901,14 @@ void initSpotify()
 
 void updateSpotify()
 {
-    if (millis() - lastCheck >= CHECK_INTERVAL)
+    if (
+        millis() -
+        lastCheck >=
+        CHECK_INTERVAL
+    )
     {
-        lastCheck = millis();
+        lastCheck =
+            millis();
 
 
         Serial.println();
@@ -348,9 +917,11 @@ void updateSpotify()
             "====================================="
         );
 
+
         Serial.println(
             "Getting currently playing song..."
         );
+
 
         Serial.println(
             "====================================="
@@ -365,6 +936,7 @@ void updateSpotify()
             "Heap BEFORE Spotify: "
         );
 
+
         Serial.println(
             ESP.getFreeHeap()
         );
@@ -373,6 +945,11 @@ void updateSpotify()
         // ----------------------------------------------------
         // Spotify request
         // ----------------------------------------------------
+
+        Serial.println(
+            ">>> BEFORE Spotify request"
+        );
+
 
         unsigned long spotifyStart =
             millis();
@@ -385,17 +962,25 @@ void updateSpotify()
             );
 
 
+        Serial.println(
+            ">>> AFTER Spotify request"
+        );
+
+
         unsigned long spotifyTime =
-            millis() - spotifyStart;
+            millis() -
+            spotifyStart;
 
 
         Serial.print(
             "Spotify request took: "
         );
 
+
         Serial.print(
             spotifyTime
         );
+
 
         Serial.println(
             " ms"
@@ -410,6 +995,7 @@ void updateSpotify()
             "Heap AFTER Spotify: "
         );
 
+
         Serial.println(
             ESP.getFreeHeap()
         );
@@ -417,9 +1003,11 @@ void updateSpotify()
 
         Serial.println();
 
+
         Serial.print(
             "Spotify response status: "
         );
+
 
         Serial.println(
             status
@@ -437,11 +1025,41 @@ void updateSpotify()
             );
 
 
+            if (
+                g_albumImageUrl !=
+                g_cachedAlbumImageUrl
+            )
+            {
+                Serial.println(
+                    "New album artwork detected - downloading."
+                );
+
+
+                downloadAlbumArtwork();
+
+
+                // ------------------------------------------------
+                // Day 4: only cache URL if download succeeded
+                // ------------------------------------------------
+
+                if (
+                    g_artworkDownloadSucceeded
+                )
+                {
+                    g_cachedAlbumImageUrl =
+                        g_albumImageUrl;
+                }
+            }
+            else
+            {
+                Serial.println(
+                    "Same album artwork - using cached image."
+                );
+            }
+
+
             // ------------------------------------------------
             // Day 4: toggle live indicator
-            //
-            // Only change the shared state here.
-            // The MAIN LOOP draws the TFT indicator.
             // ------------------------------------------------
 
             liveDotState =
@@ -455,11 +1073,14 @@ void updateSpotify()
             displayProgressMs =
                 g_progressMs;
 
+
             displayDurationMs =
                 g_durationMs;
 
+
             displayIsPlaying =
                 g_isPlaying;
+
 
             lastProgressTime =
                 millis();
@@ -469,13 +1090,18 @@ void updateSpotify()
             // Redraw when track OR play/pause changes
             // ------------------------------------------------
 
-            if (g_trackUri != g_lastTrackUri ||
-                g_isPlaying != g_lastIsPlaying)
+            if (
+                g_trackUri != g_lastTrackUri ||
+                g_isPlaying != g_lastIsPlaying
+            )
             {
                 Serial.println();
 
 
-                if (g_trackUri != g_lastTrackUri)
+                if (
+                    g_trackUri !=
+                    g_lastTrackUri
+                )
                 {
                     Serial.println(
                         "******** NEW TRACK! ********"
@@ -493,6 +1119,7 @@ void updateSpotify()
                     "Track: "
                 );
 
+
                 Serial.println(
                     g_trackName
                 );
@@ -501,6 +1128,7 @@ void updateSpotify()
                 Serial.print(
                     "Artist: "
                 );
+
 
                 Serial.println(
                     g_artistName
@@ -511,8 +1139,11 @@ void updateSpotify()
                     "Playing: "
                 );
 
+
                 Serial.println(
-                    g_isPlaying ? "Yes" : "No"
+                    g_isPlaying
+                        ? "Yes"
+                        : "No"
                 );
 
 
@@ -524,15 +1155,18 @@ void updateSpotify()
                 g_lastTrackUri =
                     g_trackUri;
 
+
                 g_lastIsPlaying =
                     g_isPlaying;
 
 
                 // Tell main loop to redraw
-                displayNeedsRedraw = true;
+                displayNeedsRedraw =
+                    true;
 
-                // Make sure idle screen is not pending
-                displayNeedsIdle = false;
+
+                displayNeedsIdle =
+                    false;
             }
             else
             {
@@ -555,41 +1189,93 @@ void updateSpotify()
 
 
             // ------------------------------------------------
+            // Free any artwork waiting in RAM
+            // ------------------------------------------------
+
+            if (g_imageBuffer != nullptr)
+            {
+                free(
+                    g_imageBuffer
+                );
+
+                g_imageBuffer =
+                    nullptr;
+
+                g_imageSize =
+                    0;
+            }
+
+
+            g_artworkReady =
+                false;
+
+
+            // ------------------------------------------------
             // Reset local progress
             // ------------------------------------------------
 
-            displayProgressMs = 0;
+            displayProgressMs =
+                0;
 
-            displayDurationMs = 0;
 
-            displayIsPlaying = false;
+            displayDurationMs =
+                0;
+
+
+            displayIsPlaying =
+                false;
 
 
             // ------------------------------------------------
             // Tell main loop to show idle screen
             // ------------------------------------------------
 
-            displayNeedsIdle = true;
+            displayNeedsIdle =
+                true;
 
-            displayNeedsRedraw = false;
+
+            displayNeedsRedraw =
+                false;
 
 
             // ------------------------------------------------
             // Clear current track information
             // ------------------------------------------------
 
-            g_trackName = "";
-
-            g_artistName = "";
-
-            g_albumName = "";
-
-            g_trackUri = "";
+            g_trackName =
+                "";
 
 
-            g_lastTrackUri = "";
+            g_artistName =
+                "";
 
-            g_lastIsPlaying = false;
+
+            g_albumName =
+                "";
+
+
+            g_trackUri =
+                "";
+
+
+            g_albumImageUrl =
+                "";
+
+
+            // ------------------------------------------------
+            // Day 4: clear cached artwork URL
+            // ------------------------------------------------
+
+            g_cachedAlbumImageUrl =
+                "";
+
+
+            g_lastTrackUri =
+                "";
+
+
+            g_lastIsPlaying =
+                false;
         }
 
 
@@ -605,9 +1291,11 @@ void updateSpotify()
                 "******** 401 UNAUTHORIZED ********"
             );
 
+
             Serial.println(
                 "Spotify rejected the access token."
             );
+
 
             Serial.println(
                 "****************************************"
@@ -625,6 +1313,7 @@ void updateSpotify()
                 "Spotify API error: "
             );
 
+
             Serial.println(
                 status
             );
@@ -637,14 +1326,18 @@ void updateSpotify()
 // Spotify FreeRTOS task
 // ------------------------------------------------------------
 
-void spotifyTask(void *parameter)
+void spotifyTask(
+    void *parameter
+)
 {
     while (true)
     {
         updateSpotify();
 
+
         vTaskDelay(
-            10 / portTICK_PERIOD_MS
+            10 /
+            portTICK_PERIOD_MS
         );
     }
 }
