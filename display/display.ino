@@ -1,4 +1,5 @@
 #include <TFT_eSPI.h>
+#include <TJpg_Decoder.h>
 #include "NotoSansMalayalamRegular20.h"
 
 TFT_eSPI tft = TFT_eSPI();
@@ -21,6 +22,128 @@ int barWidth = 300;
 
 
 // ------------------------------------------------------------
+// Week 5 Day 3 - Album artwork
+// ------------------------------------------------------------
+
+extern uint8_t *g_imageBuffer;
+extern size_t g_imageSize;
+extern volatile bool g_artworkReady;
+
+
+// ------------------------------------------------------------
+// Week 5 Day 4 - Artwork remains on TFT after JPEG buffer
+// is freed. This avoids keeping a second copy in RAM.
+// ------------------------------------------------------------
+
+bool artworkCurrentlyDisplayed = false;
+
+
+// ------------------------------------------------------------
+// Artwork colour test
+// ------------------------------------------------------------
+
+#define ARTWORK_TEST 1
+
+float artworkSaturation = 1.6;
+float artworkContrast = 1.4;
+int artworkBrightness = 1;
+
+
+// ------------------------------------------------------------
+// JPEG output callback
+// ------------------------------------------------------------
+
+bool tft_output(
+    int16_t x,
+    int16_t y,
+    uint16_t w,
+    uint16_t h,
+    uint16_t *bitmap
+)
+{
+    for (uint32_t i = 0; i < (uint32_t)w * h; i++)
+    {
+        uint16_t color = bitmap[i];
+
+        // Extract RGB565
+        int r = (color >> 11) & 0x1F;
+        int g = (color >> 5) & 0x3F;
+        int b = color & 0x1F;
+
+
+        // ----------------------------------------------------
+        // Calculate approximate luminance
+        // Gives green more weight because the eye is
+        // more sensitive to green.
+        // ----------------------------------------------------
+
+        int gray =
+            (r * 3 + g * 6 + b) / 10;
+
+
+        // ----------------------------------------------------
+        // Saturation
+        // Current setting: 1.6x
+        // ----------------------------------------------------
+
+        r = gray + (r - gray) * artworkSaturation;
+        g = gray + (g - gray) * artworkSaturation;
+        b = gray + (b - gray) * artworkSaturation;
+
+
+        // ----------------------------------------------------
+        // Contrast
+        // Current setting: 1.3x
+        // ----------------------------------------------------
+
+        r = ((r - 16) * artworkContrast) + 16;
+        g = ((g - 32) * artworkContrast) + 32;
+        b = ((b - 16) * artworkContrast) + 16;
+
+
+        // ----------------------------------------------------
+        // Brightness
+        // Current setting: +1
+        // ----------------------------------------------------
+
+        r += artworkBrightness;
+        g += artworkBrightness;
+        b += artworkBrightness;
+
+
+        // ----------------------------------------------------
+        // Keep values inside RGB565 limits
+        // ----------------------------------------------------
+
+        r = constrain(r, 0, 31);
+        g = constrain(g, 0, 63);
+        b = constrain(b, 0, 31);
+
+
+        // ----------------------------------------------------
+        // Rebuild RGB565 colour
+        // ----------------------------------------------------
+
+        bitmap[i] =
+            (r << 11) |
+            (g << 5) |
+            b;
+    }
+
+
+    tft.pushImage(
+        x,
+        y,
+        w,
+        h,
+        bitmap
+    );
+
+    return true;
+}
+
+
+// ------------------------------------------------------------
 // Display initialization
 // ------------------------------------------------------------
 
@@ -31,6 +154,15 @@ void initDisplay()
     tft.setRotation(1);
 
     tft.invertDisplay(true);
+    tft.setSwapBytes(true);
+
+    // --------------------------------------------------------
+    // Week 5 Day 3 - Initialize JPEG decoder
+    // --------------------------------------------------------
+
+    TJpgDec.setCallback(tft_output);
+
+    TJpgDec.setJpgScale(2);
 
     drawBootScreen();
 
@@ -153,10 +285,6 @@ String normalizeLatin(String s)
 
         switch (codepoint)
         {
-            // ------------------------------------------------
-            // A
-            // ------------------------------------------------
-
             case 0x00C0:
             case 0x00C1:
             case 0x00C2:
@@ -174,11 +302,6 @@ String normalizeLatin(String s)
             case 0x0202:
                 result += "A";
                 break;
-
-
-            // ------------------------------------------------
-            // a
-            // ------------------------------------------------
 
             case 0x00E0:
             case 0x00E1:
@@ -198,11 +321,6 @@ String normalizeLatin(String s)
                 result += "a";
                 break;
 
-
-            // ------------------------------------------------
-            // AE
-            // ------------------------------------------------
-
             case 0x00C6:
                 result += "AE";
                 break;
@@ -210,11 +328,6 @@ String normalizeLatin(String s)
             case 0x00E6:
                 result += "ae";
                 break;
-
-
-            // ------------------------------------------------
-            // C
-            // ------------------------------------------------
 
             case 0x00C7:
             case 0x0106:
@@ -232,11 +345,6 @@ String normalizeLatin(String s)
                 result += "c";
                 break;
 
-
-            // ------------------------------------------------
-            // D
-            // ------------------------------------------------
-
             case 0x00D0:
             case 0x010E:
             case 0x0110:
@@ -248,11 +356,6 @@ String normalizeLatin(String s)
             case 0x0111:
                 result += "d";
                 break;
-
-
-            // ------------------------------------------------
-            // E
-            // ------------------------------------------------
 
             case 0x00C8:
             case 0x00C9:
@@ -282,11 +385,6 @@ String normalizeLatin(String s)
                 result += "e";
                 break;
 
-
-            // ------------------------------------------------
-            // G
-            // ------------------------------------------------
-
             case 0x011C:
             case 0x011E:
             case 0x0120:
@@ -301,11 +399,6 @@ String normalizeLatin(String s)
                 result += "g";
                 break;
 
-
-            // ------------------------------------------------
-            // H
-            // ------------------------------------------------
-
             case 0x0124:
             case 0x0126:
                 result += "H";
@@ -315,11 +408,6 @@ String normalizeLatin(String s)
             case 0x0127:
                 result += "h";
                 break;
-
-
-            // ------------------------------------------------
-            // I
-            // ------------------------------------------------
 
             case 0x00CC:
             case 0x00CD:
@@ -349,11 +437,6 @@ String normalizeLatin(String s)
                 result += "i";
                 break;
 
-
-            // ------------------------------------------------
-            // J
-            // ------------------------------------------------
-
             case 0x0134:
                 result += "J";
                 break;
@@ -362,11 +445,6 @@ String normalizeLatin(String s)
                 result += "j";
                 break;
 
-
-            // ------------------------------------------------
-            // K
-            // ------------------------------------------------
-
             case 0x0136:
                 result += "K";
                 break;
@@ -374,11 +452,6 @@ String normalizeLatin(String s)
             case 0x0137:
                 result += "k";
                 break;
-
-
-            // ------------------------------------------------
-            // L
-            // ------------------------------------------------
 
             case 0x0139:
             case 0x013B:
@@ -396,11 +469,6 @@ String normalizeLatin(String s)
                 result += "l";
                 break;
 
-
-            // ------------------------------------------------
-            // N
-            // ------------------------------------------------
-
             case 0x00D1:
             case 0x0143:
             case 0x0145:
@@ -416,11 +484,6 @@ String normalizeLatin(String s)
             case 0x014B:
                 result += "n";
                 break;
-
-
-            // ------------------------------------------------
-            // O
-            // ------------------------------------------------
 
             case 0x00D2:
             case 0x00D3:
@@ -456,11 +519,6 @@ String normalizeLatin(String s)
                 result += "o";
                 break;
 
-
-            // ------------------------------------------------
-            // OE
-            // ------------------------------------------------
-
             case 0x0152:
                 result += "OE";
                 break;
@@ -468,11 +526,6 @@ String normalizeLatin(String s)
             case 0x0153:
                 result += "oe";
                 break;
-
-
-            // ------------------------------------------------
-            // R
-            // ------------------------------------------------
 
             case 0x0154:
             case 0x0156:
@@ -485,11 +538,6 @@ String normalizeLatin(String s)
             case 0x0159:
                 result += "r";
                 break;
-
-
-            // ------------------------------------------------
-            // S
-            // ------------------------------------------------
 
             case 0x015A:
             case 0x015C:
@@ -505,11 +553,6 @@ String normalizeLatin(String s)
                 result += "s";
                 break;
 
-
-            // ------------------------------------------------
-            // T
-            // ------------------------------------------------
-
             case 0x0162:
             case 0x0164:
             case 0x0166:
@@ -521,11 +564,6 @@ String normalizeLatin(String s)
             case 0x0167:
                 result += "t";
                 break;
-
-
-            // ------------------------------------------------
-            // U
-            // ------------------------------------------------
 
             case 0x00D9:
             case 0x00DA:
@@ -557,11 +595,6 @@ String normalizeLatin(String s)
                 result += "u";
                 break;
 
-
-            // ------------------------------------------------
-            // W
-            // ------------------------------------------------
-
             case 0x0174:
                 result += "W";
                 break;
@@ -569,11 +602,6 @@ String normalizeLatin(String s)
             case 0x0175:
                 result += "w";
                 break;
-
-
-            // ------------------------------------------------
-            // Y
-            // ------------------------------------------------
 
             case 0x00DD:
             case 0x0176:
@@ -589,11 +617,6 @@ String normalizeLatin(String s)
                 result += "y";
                 break;
 
-
-            // ------------------------------------------------
-            // Z
-            // ------------------------------------------------
-
             case 0x0179:
             case 0x017B:
             case 0x017D:
@@ -606,19 +629,9 @@ String normalizeLatin(String s)
                 result += "z";
                 break;
 
-
-            // ------------------------------------------------
-            // German sharp S
-            // ------------------------------------------------
-
             case 0x00DF:
                 result += "ss";
                 break;
-
-
-            // ------------------------------------------------
-            // Thorn
-            // ------------------------------------------------
 
             case 0x00DE:
                 result += "TH";
@@ -628,13 +641,7 @@ String normalizeLatin(String s)
                 result += "th";
                 break;
 
-
-            // ------------------------------------------------
-            // Unknown character
-            // ------------------------------------------------
-
             default:
-                // Skip unsupported character
                 break;
         }
     }
@@ -814,9 +821,14 @@ void drawNowPlaying(
     bool isPlaying
 )
 {
-    tft.fillScreen(
-        TFT_BLACK
-    );
+    // --------------------------------------------------------
+    // Check whether new artwork is available
+    // --------------------------------------------------------
+
+    bool newArtworkAvailable =
+        g_artworkReady &&
+        g_imageBuffer != nullptr &&
+        g_imageSize > 0;
 
 
     // --------------------------------------------------------
@@ -837,16 +849,109 @@ void drawNowPlaying(
 
 
     // --------------------------------------------------------
-    // Artwork placeholder
+    // NEW ALBUM ARTWORK
     // --------------------------------------------------------
 
-    tft.fillRect(
-        10,
-        10,
-        150,
-        150,
-        TFT_DARKGREY
-    );
+    if (newArtworkAvailable)
+    {
+        // New artwork means we need a full redraw
+        tft.fillScreen(
+            TFT_BLACK
+        );
+
+
+        // Draw placeholder first
+        tft.fillRect(
+            10,
+            10,
+            150,
+            150,
+            TFT_DARKGREY
+        );
+
+
+        Serial.println(
+            "Decoding and drawing album artwork..."
+        );
+
+
+        TJpgDec.drawJpg(
+            10,
+            10,
+            g_imageBuffer,
+            g_imageSize
+        );
+
+
+        Serial.println(
+            "Album artwork drawn successfully."
+        );
+
+
+        // The artwork now physically exists on the TFT
+        artworkCurrentlyDisplayed =
+            true;
+
+
+        // ----------------------------------------------------
+        // IMPORTANT:
+        // Free JPEG RAM immediately after decoding
+        // ----------------------------------------------------
+
+        g_artworkReady =
+            false;
+
+
+        free(
+            g_imageBuffer
+        );
+
+
+        g_imageBuffer =
+            nullptr;
+
+
+        g_imageSize =
+            0;
+    }
+
+
+    // --------------------------------------------------------
+    // NO NEW ARTWORK
+    // --------------------------------------------------------
+
+    else
+    {
+        // If artwork is already on the TFT,
+        // keep it there and only clear the right side.
+        if (artworkCurrentlyDisplayed)
+        {
+            tft.fillRect(
+                165,
+                0,
+                155,
+                205,
+                TFT_BLACK
+            );
+        }
+
+        // If there is no artwork displayed yet,
+        // make a fresh screen with placeholder.
+        else
+        {
+            tft.fillScreen(
+                TFT_BLACK
+            );
+
+            tft.fillRect(
+                10,
+                10,
+                150,
+                150,
+                TFT_DARKGREY
+            );
+        }
+    }
 
 
     // --------------------------------------------------------
@@ -1096,6 +1201,11 @@ void drawIdleScreen()
     );
 
 
+    // Artwork is no longer on the screen
+    artworkCurrentlyDisplayed =
+        false;
+
+
     currentTitle = "";
 
     titleNeedsScroll = false;
@@ -1302,6 +1412,7 @@ void updateDisplay()
             );
 
         timeText += " / ";
+
 
         timeText +=
             formatTime(
